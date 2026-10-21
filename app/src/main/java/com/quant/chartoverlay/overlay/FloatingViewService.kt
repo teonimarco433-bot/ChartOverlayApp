@@ -8,9 +8,11 @@ import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
 import android.view.*
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.quant.chartoverlay.core.CandleAnalysisEngine
+import com.quant.chartoverlay.core.ScreenCaptureService
 import com.quant.chartoverlay.core.SignalType
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collectLatest
@@ -52,12 +54,39 @@ class FloatingViewService : Service() {
 
         container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#E6121212")) // Nero opaco 90%
-            setPadding(35, 25, 35, 25)
+            setBackgroundColor(Color.parseColor("#E6121212")) // Sfondo scuro 90%
+            setPadding(35, 20, 35, 25)
         }
 
+        // Header orizzontale con titolo e tasto di chiusura rapida [X]
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        val title = TextView(this).apply {
+            text = "QUANT SCANNER"
+            setTextColor(Color.GRAY)
+            textSize = 10f
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f)
+        }
+
+        val closeBtn = TextView(this).apply {
+            text = " ✕ "
+            setTextColor(Color.RED)
+            textSize = 16f
+            paint.isFakeBoldText = true
+            setPadding(15, 0, 0, 10)
+            setOnClickListener {
+                stopSelf() // Chiusura immediata overlay
+            }
+        }
+
+        header.addView(title)
+        header.addView(closeBtn)
+
         priceView = TextView(this).apply {
-            text = "PREZZO: ATTESA..."
+            text = "LIVE: ATTESA..."
             setTextColor(Color.WHITE)
             textSize = 14f
         }
@@ -70,16 +99,17 @@ class FloatingViewService : Service() {
         }
 
         ratioView = TextView(this).apply {
-            text = "WICK RATIO: --"
+            text = "WICK/BODY: --"
             setTextColor(Color.LTGRAY)
             textSize = 12f
         }
 
+        container.addView(header)
         container.addView(priceView)
         container.addView(signalView)
         container.addView(ratioView)
 
-        // Drag & drop
+        // Drag & Drop
         container.setOnTouchListener(object : View.OnTouchListener {
             var ix = 0; var iy = 0; var tx = 0f; var ty = 0f
             override fun onTouch(v: View, e: MotionEvent): Boolean {
@@ -112,11 +142,11 @@ class FloatingViewService : Service() {
                 when (t.signal) {
                     SignalType.RIASSORBIMENTO_BUY -> {
                         signalView.text = "RIASSORBIMENTO BUY"
-                        signalView.setTextColor(Color.parseColor("#00E676")) // Verde Smeraldo Forte
+                        signalView.setTextColor(Color.parseColor("#00E676"))
                     }
                     SignalType.RIASSORBIMENTO_SELL -> {
                         signalView.text = "RIASSORBIMENTO SELL"
-                        signalView.setTextColor(Color.parseColor("#FF1744")) // Rosso Acceso
+                        signalView.setTextColor(Color.parseColor("#FF1744"))
                     }
                     SignalType.ESAURIMENTO_BUY -> {
                         signalView.text = "ESAURIMENTO BUY"
@@ -135,9 +165,19 @@ class FloatingViewService : Service() {
         }
     }
 
+    // Arresto automatico quando l'app viene chiusa dal multitasking (swipe-away)
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
         scope.cancel()
-        wm.removeView(container)
+        if (::container.isInitialized) {
+            wm.removeView(container)
+        }
+        // Termina anche il servizio di acquisizione frame
+        stopService(Intent(this, ScreenCaptureService::class.java))
         super.onDestroy()
     }
 }

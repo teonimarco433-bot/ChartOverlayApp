@@ -88,9 +88,14 @@ class ScreenCaptureService : Service() {
         }
         return Notification.Builder(this, CH_ID)
             .setContentTitle("QuantOverlay Attivo")
-            .setContentText("Cattura frame attiva")
+            .setContentText("Cattura frame in esecuzione")
             .setSmallIcon(R.drawable.ic_launcher)
             .build()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
