@@ -11,8 +11,8 @@ android {
         applicationId "com.quant.chartoverlay"
         minSdk 26
         targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        versionCode 5
+        versionName "1.0.5"
     }
 
     compileOptions {
@@ -26,4 +26,5 @@ android {
 
 dependencies {
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+    implementation 'com.google.mlkit:text-recognition:16.0.0'
 }
