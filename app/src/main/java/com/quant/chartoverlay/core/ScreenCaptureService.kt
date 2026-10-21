@@ -12,6 +12,7 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
 import com.quant.chartoverlay.R
@@ -27,6 +28,8 @@ class ScreenCaptureService : Service() {
 
     private var mp: MediaProjection? = null
     private var ir: ImageReader? = null
+    private var backgroundThread: HandlerThread? = null
+    private var backgroundHandler: Handler? = null
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -50,8 +53,10 @@ class ScreenCaptureService : Service() {
     }
 
     private fun setupCapture() {
+        backgroundThread = HandlerThread("CaptureThread").apply { start() }
+        backgroundHandler = Handler(backgroundThread!!.looper)
+
         val dm = resources.displayMetrics
-        // Risoluzione nativa piena 1:1 per massima nitidezza OCR
         val w = dm.widthPixels
         val h = dm.heightPixels
         ir = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
@@ -65,21 +70,37 @@ class ScreenCaptureService : Service() {
         }, Handler(Looper.getMainLooper()))
 
         mp?.createVirtualDisplay("QuantCapture", w, h, dm.densityDpi, 
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, ir?.surface, null, null)
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, ir?.surface, null, backgroundHandler)
 
         ir?.setOnImageAvailableListener({ reader ->
             val img = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
-            scope.launch {
-                try {
-                    val plane = img.planes[0]
-                    val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-                    bmp.copyPixelsFromBuffer(plane.buffer)
-                    CandleAnalysisEngine.processFrame(bmp)
-                } finally {
-                    img.close()
+            try {
+                val plane = img.planes[0]
+                val buffer = plane.buffer
+                val pixelStride = plane.pixelStride
+                val rowStride = plane.rowStride
+                val rowPadding = rowStride - pixelStride * w
+
+                // Correzione critica per GPU Samsung: gestione del padding di riga
+                val paddedBitmap = Bitmap.createBitmap(
+                    w + rowPadding / pixelStride,
+                    h,
+                    Bitmap.Config.ARGB_8888
+                )
+                paddedBitmap.copyPixelsFromBuffer(buffer)
+
+                val cleanBitmap = if (rowPadding == 0) {
+                    paddedBitmap
+                } else {
+                    Bitmap.createBitmap(paddedBitmap, 0, 0, w, h)
                 }
+
+                CandleAnalysisEngine.processFrame(cleanBitmap)
+            } catch (_: Exception) {
+            } finally {
+                img.close()
             }
-        }, null)
+        }, backgroundHandler)
     }
 
     private fun createNotification(): Notification {
@@ -89,7 +110,7 @@ class ScreenCaptureService : Service() {
         }
         return Notification.Builder(this, CH_ID)
             .setContentTitle("QuantOverlay Attivo")
-            .setContentText("Lettura real-time del grafico")
+            .setContentText("Cattura frame attiva")
             .setSmallIcon(R.drawable.ic_launcher)
             .build()
     }
@@ -101,6 +122,7 @@ class ScreenCaptureService : Service() {
 
     override fun onDestroy() {
         scope.cancel()
+        backgroundThread?.quitSafely()
         ir?.close()
         mp?.stop()
         super.onDestroy()
