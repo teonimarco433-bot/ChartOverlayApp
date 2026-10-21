@@ -8,7 +8,6 @@ import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
 import android.view.*
-import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.quant.chartoverlay.core.CandleAnalysisEngine
@@ -20,9 +19,10 @@ import kotlinx.coroutines.flow.collectLatest
 class FloatingViewService : Service() {
     private lateinit var wm: WindowManager
     private lateinit var container: LinearLayout
+    private lateinit var heartBeatView: TextView
     private lateinit var priceView: TextView
+    private lateinit var candleView: TextView
     private lateinit var signalView: TextView
-    private lateinit var ratioView: TextView
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -48,25 +48,24 @@ class FloatingViewService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 80
-            y = 150
+            x = 60
+            y = 120
         }
 
         container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#E6121212")) // Sfondo scuro 90%
+            setBackgroundColor(Color.parseColor("#EE101010")) // Nero 93%
             setPadding(35, 20, 35, 25)
         }
 
-        // Header orizzontale con titolo e tasto di chiusura rapida [X]
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        val title = TextView(this).apply {
-            text = "QUANT SCANNER"
-            setTextColor(Color.GRAY)
+        heartBeatView = TextView(this).apply {
+            text = "● LIVE (FRAME #0)"
+            setTextColor(Color.parseColor("#00E676"))
             textSize = 10f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f)
         }
@@ -74,42 +73,42 @@ class FloatingViewService : Service() {
         val closeBtn = TextView(this).apply {
             text = " ✕ "
             setTextColor(Color.RED)
-            textSize = 16f
+            textSize = 17f
             paint.isFakeBoldText = true
-            setPadding(15, 0, 0, 10)
-            setOnClickListener {
-                stopSelf() // Chiusura immediata overlay
-            }
+            setPadding(20, 0, 0, 5)
+            setOnClickListener { stopSelf() }
         }
 
-        header.addView(title)
+        header.addView(heartBeatView)
         header.addView(closeBtn)
 
         priceView = TextView(this).apply {
-            text = "LIVE: ATTESA..."
+            text = "PREZZO: IN ATTESA..."
             setTextColor(Color.WHITE)
-            textSize = 14f
+            textSize = 15f
+            paint.isFakeBoldText = true
+            setPadding(0, 5, 0, 3)
+        }
+
+        candleView = TextView(this).apply {
+            text = "CANDELA: IN SCANSIONE"
+            setTextColor(Color.LTGRAY)
+            textSize = 12f
+            setPadding(0, 0, 0, 5)
         }
 
         signalView = TextView(this).apply {
             text = "STATO: SCANNING..."
             setTextColor(Color.CYAN)
-            textSize = 15f
+            textSize = 14f
             paint.isFakeBoldText = true
-        }
-
-        ratioView = TextView(this).apply {
-            text = "WICK/BODY: --"
-            setTextColor(Color.LTGRAY)
-            textSize = 12f
         }
 
         container.addView(header)
         container.addView(priceView)
+        container.addView(candleView)
         container.addView(signalView)
-        container.addView(ratioView)
 
-        // Drag & Drop
         container.setOnTouchListener(object : View.OnTouchListener {
             var ix = 0; var iy = 0; var tx = 0f; var ty = 0f
             override fun onTouch(v: View, e: MotionEvent): Boolean {
@@ -136,8 +135,12 @@ class FloatingViewService : Service() {
     private fun observeData() {
         scope.launch {
             CandleAnalysisEngine.telemetry.collectLatest { t ->
-                priceView.text = "LIVE: ${t.currentPrice}"
-                ratioView.text = if (t.wickRatio > 0) "WICK/BODY: ${String.format("%.1fx", t.wickRatio)}" else "WICK/BODY: --"
+                heartBeatView.text = "● LIVE (FRAME #${t.frameId})"
+                priceView.text = "PREZZO: ${t.currentPrice}"
+
+                val candleColorHex = if (t.candleColor == "VERDE") "#00E676" else if (t.candleColor == "ROSSO") "#FF3D00" else "#AAAAAA"
+                candleView.text = "CANDELA: ${t.candleColor} (${t.candleHeightPx}px | ${String.format("%.1fx", t.wickRatio)})"
+                candleView.setTextColor(Color.parseColor(candleColorHex))
 
                 when (t.signal) {
                     SignalType.RIASSORBIMENTO_BUY -> {
@@ -157,7 +160,7 @@ class FloatingViewService : Service() {
                         signalView.setTextColor(Color.RED)
                     }
                     SignalType.SCANNING -> {
-                        signalView.text = "SCANNING..."
+                        signalView.text = "STATO: SCANNING..."
                         signalView.setTextColor(Color.CYAN)
                     }
                 }
@@ -165,7 +168,6 @@ class FloatingViewService : Service() {
         }
     }
 
-    // Arresto automatico quando l'app viene chiusa dal multitasking (swipe-away)
     override fun onTaskRemoved(rootIntent: Intent?) {
         stopSelf()
         super.onTaskRemoved(rootIntent)
@@ -173,10 +175,7 @@ class FloatingViewService : Service() {
 
     override fun onDestroy() {
         scope.cancel()
-        if (::container.isInitialized) {
-            wm.removeView(container)
-        }
-        // Termina anche il servizio di acquisizione frame
+        if (::container.isInitialized) wm.removeView(container)
         stopService(Intent(this, ScreenCaptureService::class.java))
         super.onDestroy()
     }

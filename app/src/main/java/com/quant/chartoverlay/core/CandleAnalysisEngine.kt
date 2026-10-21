@@ -21,9 +21,12 @@ enum class SignalType {
 }
 
 data class TelemetryState(
+    val frameId: Long,
     val currentPrice: String,
-    val signal: SignalType,
-    val wickRatio: Float
+    val candleColor: String,
+    val candleHeightPx: Int,
+    val wickRatio: Float,
+    val signal: SignalType
 )
 
 object CandleAnalysisEngine {
@@ -33,38 +36,49 @@ object CandleAnalysisEngine {
     private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     private val pricePattern = Pattern.compile("\\b\\d+[.,]\\d{2,6}\\b")
 
-    private var cachedPrice = "N/D"
-    private var lastOcrTimestamp = 0L
-    private val OCR_INTERVAL_MS = 250L // Scansione OCR 4 volte al secondo per non saturare CPU
+    private var frameCounter = 0L
+    private var cachedPrice = "RICERCA..."
+    private var lastOcrTime = 0L
+    private const val OCR_INTERVAL_MS = 200L
 
     fun processFrame(bitmap: Bitmap) {
+        frameCounter++
         val now = System.currentTimeMillis()
 
-        // 1. OCR Estrazione Prezzo Asse Destro (ultimi 18% larghezza)
-        if (now - lastOcrTimestamp > OCR_INTERVAL_MS) {
-            lastOcrTimestamp = now
-            extractRealtimePrice(bitmap)
+        // 1. OCR Asse Prezzi Destro (ultimi 22% larghezza schermo a risoluzione piena)
+        if (now - lastOcrTime > OCR_INTERVAL_MS) {
+            lastOcrTime = now
+            scanPriceAxis(bitmap)
         }
 
-        // 2. Analisi Candele Pixel & Riassorbimenti
-        val (signal, ratio) = evaluateCandleStructure(bitmap)
+        // 2. Tracciamento Struttura Ultima Candela
+        val candleMetrics = analyzeLatestCandle(bitmap)
 
-        _telemetry.tryEmit(TelemetryState(cachedPrice, signal, ratio))
+        _telemetry.tryEmit(
+            TelemetryState(
+                frameId = frameCounter,
+                currentPrice = cachedPrice,
+                candleColor = candleMetrics.colorName,
+                candleHeightPx = candleMetrics.heightPx,
+                wickRatio = candleMetrics.ratio,
+                signal = candleMetrics.signal
+            )
+        )
     }
 
-    private fun extractRealtimePrice(b: Bitmap) {
+    private fun scanPriceAxis(b: Bitmap) {
         try {
-            val axisStartX = (b.width * 0.82f).toInt()
+            val axisStartX = (b.width * 0.78f).toInt()
             val axisWidth = b.width - axisStartX
-            val croppedAxis = Bitmap.createBitmap(b, axisStartX, 0, axisWidth, b.height)
+            val cropped = Bitmap.createBitmap(b, axisStartX, 0, axisWidth, b.height)
 
-            val inputImage = InputImage.fromBitmap(croppedAxis, 0)
+            val inputImage = InputImage.fromBitmap(cropped, 0)
             recognizer.process(inputImage)
-                .addOnSuccessListener { visionText ->
-                    for (block in visionText.textBlocks) {
-                        val matcher = pricePattern.matcher(block.text)
-                        if (matcher.find()) {
-                            cachedPrice = matcher.group()
+                .addOnSuccessListener { textResult ->
+                    for (block in textResult.textBlocks) {
+                        val m = pricePattern.matcher(block.text)
+                        if (m.find()) {
+                            cachedPrice = m.group()
                             break
                         }
                     }
@@ -72,28 +86,44 @@ object CandleAnalysisEngine {
         } catch (_: Exception) {}
     }
 
-    private fun evaluateCandleStructure(b: Bitmap): Pair<SignalType, Float> {
+    private data class CandleMetrics(
+        val colorName: String,
+        val heightPx: Int,
+        val ratio: Float,
+        val signal: SignalType
+    )
+
+    private fun analyzeLatestCandle(b: Bitmap): CandleMetrics {
         val width = b.width
         val height = b.height
-        val startX = (width * 0.70f).toInt()
-        val endX = (width * 0.84f).toInt()
+        val startX = (width * 0.65f).toInt()
+        val endX = (width * 0.82f).toInt()
 
-        for (x in endX downTo startX step 3) {
+        for (x in endX downTo startX step 4) {
             var highestY = -1
             var lowestY = -1
             var bodyTopY = -1
             var bodyBottomY = -1
+            var greenPixels = 0
+            var redPixels = 0
 
-            for (y in 60 until height - 60 step 2) {
-                val pixel = b.getPixel(x, y)
-                val r = Color.red(pixel)
-                val g = Color.green(pixel)
-                val bl = Color.blue(pixel)
+            for (y in 80 until height - 80 step 3) {
+                val p = b.getPixel(x, y)
+                val r = Color.red(p)
+                val g = Color.green(p)
+                val bl = Color.blue(p)
 
-                val isGreen = g > 140 && r < 120 && bl < 120
+                val isGreen = g > 130 && r < 120 && bl < 120
                 val isRed = r > 150 && g < 110 && bl < 110
 
-                if (isGreen || isRed) {
+                if (isGreen) {
+                    greenPixels++
+                    if (highestY == -1) highestY = y
+                    lowestY = y
+                    if (bodyTopY == -1) bodyTopY = y
+                    bodyBottomY = y
+                } else if (isRed) {
+                    redPixels++
                     if (highestY == -1) highestY = y
                     lowestY = y
                     if (bodyTopY == -1) bodyTopY = y
@@ -103,36 +133,35 @@ object CandleAnalysisEngine {
 
             if (highestY != -1 && lowestY != -1) {
                 val totalRange = lowestY - highestY
-                if (totalRange >= 20) {
+                if (totalRange >= 15) {
+                    val colorName = if (greenPixels >= redPixels) "VERDE" else "ROSSO"
                     val bodyHeight = max(1, bodyBottomY - bodyTopY)
                     val upperWick = bodyTopY - highestY
                     val lowerWick = lowestY - bodyBottomY
 
-                    val upperRatio = upperWick.toFloat() / bodyHeight.toFloat()
-                    val lowerRatio = lowerWick.toFloat() / bodyHeight.toFloat()
+                    val upperRatio = upperWick.toFloat() / bodyHeight
+                    val lowerRatio = lowerWick.toFloat() / bodyHeight
 
-                    // Riassorbimento Sell: sweep massimi con forte wick reiezione (Ratio >= 3.0)
+                    // Riassorbimento (Sweep)
                     if (upperRatio >= 3.0f && upperWick >= (totalRange * 0.60f)) {
-                        return Pair(SignalType.RIASSORBIMENTO_SELL, upperRatio)
+                        return CandleMetrics(colorName, totalRange, upperRatio, SignalType.RIASSORBIMENTO_SELL)
                     }
-
-                    // Riassorbimento Buy: sweep minimi con forte wick reiezione (Ratio >= 3.0)
                     if (lowerRatio >= 3.0f && lowerWick >= (totalRange * 0.60f)) {
-                        return Pair(SignalType.RIASSORBIMENTO_BUY, lowerRatio)
+                        return CandleMetrics(colorName, totalRange, lowerRatio, SignalType.RIASSORBIMENTO_BUY)
                     }
 
-                    // Esaurimento Sell standard (Ratio >= 2.2)
+                    // Esaurimento (Rejection)
                     if (upperRatio >= 2.2f && upperWick >= (totalRange * 0.50f)) {
-                        return Pair(SignalType.ESAURIMENTO_SELL, upperRatio)
+                        return CandleMetrics(colorName, totalRange, upperRatio, SignalType.ESAURIMENTO_SELL)
+                    }
+                    if (lowerRatio >= 2.2f && lowerWick >= (totalRange * 0.50f)) {
+                        return CandleMetrics(colorName, totalRange, lowerRatio, SignalType.ESAURIMENTO_BUY)
                     }
 
-                    // Esaurimento Buy standard (Ratio >= 2.2)
-                    if (lowerRatio >= 2.2f && lowerWick >= (totalRange * 0.50f)) {
-                        return Pair(SignalType.ESAURIMENTO_BUY, lowerRatio)
-                    }
+                    return CandleMetrics(colorName, totalRange, max(upperRatio, lowerRatio), SignalType.SCANNING)
                 }
             }
         }
-        return Pair(SignalType.SCANNING, 0.0f)
+        return CandleMetrics("NON TROVATA", 0, 0f, SignalType.SCANNING)
     }
 }

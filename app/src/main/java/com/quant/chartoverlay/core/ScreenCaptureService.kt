@@ -51,8 +51,9 @@ class ScreenCaptureService : Service() {
 
     private fun setupCapture() {
         val dm = resources.displayMetrics
-        val w = dm.widthPixels / 2
-        val h = dm.heightPixels / 2
+        // Risoluzione nativa piena 1:1 per massima nitidezza OCR
+        val w = dm.widthPixels
+        val h = dm.heightPixels
         ir = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
 
         mp?.registerCallback(object : MediaProjection.Callback() {
@@ -88,7 +89,7 @@ class ScreenCaptureService : Service() {
         }
         return Notification.Builder(this, CH_ID)
             .setContentTitle("QuantOverlay Attivo")
-            .setContentText("Cattura frame in esecuzione")
+            .setContentText("Lettura real-time del grafico")
             .setSmallIcon(R.drawable.ic_launcher)
             .build()
     }
