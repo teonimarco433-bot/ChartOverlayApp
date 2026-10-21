@@ -11,7 +11,9 @@ import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import com.quant.chartoverlay.R
 import kotlinx.coroutines.*
 
@@ -52,17 +54,29 @@ class ScreenCaptureService : Service() {
         val w = dm.widthPixels / 2
         val h = dm.heightPixels / 2
         ir = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
-        mp?.createVirtualDisplay("Capture", w, h, dm.densityDpi, 
+
+        mp?.registerCallback(object : MediaProjection.Callback() {
+            override fun onStop() {
+                super.onStop()
+                ir?.close()
+                mp = null
+            }
+        }, Handler(Looper.getMainLooper()))
+
+        mp?.createVirtualDisplay("QuantCapture", w, h, dm.densityDpi, 
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, ir?.surface, null, null)
 
         ir?.setOnImageAvailableListener({ reader ->
             val img = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
             scope.launch {
-                val plane = img.planes[0]
-                val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-                bmp.copyPixelsFromBuffer(plane.buffer)
-                img.close()
-                CandleAnalysisEngine.processFrame(bmp)
+                try {
+                    val plane = img.planes[0]
+                    val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                    bmp.copyPixelsFromBuffer(plane.buffer)
+                    CandleAnalysisEngine.processFrame(bmp)
+                } finally {
+                    img.close()
+                }
             }
         }, null)
     }
@@ -74,7 +88,7 @@ class ScreenCaptureService : Service() {
         }
         return Notification.Builder(this, CH_ID)
             .setContentTitle("QuantOverlay Attivo")
-            .setContentText("Cattura frame in esecuzione")
+            .setContentText("Cattura frame attiva")
             .setSmallIcon(R.drawable.ic_launcher)
             .build()
     }
