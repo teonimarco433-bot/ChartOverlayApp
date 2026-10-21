@@ -12,6 +12,7 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.IBinder
+import com.quant.chartoverlay.R
 import kotlinx.coroutines.*
 
 class ScreenCaptureService : Service() {
@@ -68,10 +69,14 @@ class ScreenCaptureService : Service() {
 
     private fun createNotification(): Notification {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val ch = NotificationChannel(CH_ID, "ScreenCapture", NotificationManager.IMPORTANCE_LOW)
+            val ch = NotificationChannel(CH_ID, "QuantScanner", NotificationManager.IMPORTANCE_LOW)
             getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
         }
-        return Notification.Builder(this, CH_ID).setContentTitle("Overlay Active").build()
+        return Notification.Builder(this, CH_ID)
+            .setContentTitle("QuantOverlay Attivo")
+            .setContentText("Cattura frame in esecuzione")
+            .setSmallIcon(R.drawable.ic_launcher)
+            .build()
     }
 
     override fun onDestroy() {
